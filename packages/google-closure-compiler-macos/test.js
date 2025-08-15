@@ -22,8 +22,8 @@ import nativeImagePath from './index.js';
 
 const dimWhite = (text) => chalk.dim(chalk.white(text));
 
-process.stdout.write('google-closure-compiler-linux\n');
-if (process.platform !== 'linux' || !['x64','x32'].includes(process.arch)) {
+process.stdout.write('google-closure-compiler-macos\n');
+if (process.platform !== 'darwin') {
   process.stdout.write(dimWhite(`  skipping tests - incorrect platform\n`));
 } else if (fs.existsSync(nativeImagePath)) {
   process.stdout.write(`  ${chalk.greenBright('✓')} ${dimWhite('compiler binary exists')}\n`);

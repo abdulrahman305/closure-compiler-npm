@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Copyright 2018 The Closure Compiler Authors.
+ * Copyright 2025 The Closure Compiler Authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,11 +30,11 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const dimWhite = (text) => chalk.dim(chalk.white(text));
 
 if (fs.existsSync(path.resolve(__dirname, 'compiler'))) {
-  process.stdout.write(dimWhite(`  google-closure-compiler-linux binary already exists\n`));
-} else if (process.platform !== 'linux' || !['x32', 'x64'].includes(process.arch)) {
-  process.stdout.write(dimWhite(`  google-closure-compiler-linux build wrong platform\n`));
+  process.stdout.write(dimWhite(`  google-closure-compiler-linux-arm64 binary already exists\n`));
+} else if (process.platform !== 'linux' || process.arch !== 'arm64') {
+  process.stdout.write(dimWhite(`  google-closure-compiler-linux-arm64 build wrong platform\n`));
 } else {
-  process.stdout.write(dimWhite(`  google-closure-compiler-linux building image\n`));
+  process.stdout.write(dimWhite(`  google-closure-compiler-linux-arm64 building image\n`));
   runCommand('node', ['../../build-scripts/graal.js'])
       .then(({exitCode}) => {
         process.exitCode = exitCode || 0;

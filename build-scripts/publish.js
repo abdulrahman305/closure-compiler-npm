@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-'use strict';
 /**
  * @fileoverview
  *
@@ -23,13 +22,14 @@
  * Packages can only be published after all their dependencies have been successfully published.
  */
 
-const fs = require('fs/promises');
-const graphlib = require('graphlib');
-const path = require('path');
-const runCommand = require('./run-command');
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import graphlib from 'graphlib';
+import {fileURLToPath, URL} from 'node:url';
+import runCommand from './run-command.js';
 
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const packagesDirPath = path.resolve(__dirname, '../packages');
-const isNightlyVersion = process.env.COMPILER_NIGHTLY === 'true';
 
 async function isPackageVersionPublished(packageName, version) {
   return fetch(`https://registry.npmjs.org/${encodeURI(packageName)}/${version}`)
@@ -63,9 +63,6 @@ async function publishPackagesIfNeeded(packageInfo) {
   }
   console.log('Publishing', pkgJson.name, pkgJson.version);
   const publishArgs = ['-w', pkgJson.name, 'publish'];
-  if (isNightlyVersion) {
-    publishArgs.push('--tag', 'nightly');
-  }
   await runCommand('npm', publishArgs);
 }
 

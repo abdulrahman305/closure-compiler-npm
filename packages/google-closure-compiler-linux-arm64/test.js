@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Copyright 2018 The Closure Compiler Authors.
+ * Copyright 2025 The Closure Compiler Authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,8 +22,8 @@ import nativeImagePath from './index.js';
 
 const dimWhite = (text) => chalk.dim(chalk.white(text));
 
-process.stdout.write('google-closure-compiler-linux\n');
-if (process.platform !== 'linux' || !['x64','x32'].includes(process.arch)) {
+process.stdout.write('google-closure-compiler-linux-arm64\n');
+if (process.platform !== 'linux' || process.arch !== 'arm64') {
   process.stdout.write(dimWhite(`  skipping tests - incorrect platform\n`));
 } else if (fs.existsSync(nativeImagePath)) {
   process.stdout.write(`  ${chalk.greenBright('✓')} ${dimWhite('compiler binary exists')}\n`);

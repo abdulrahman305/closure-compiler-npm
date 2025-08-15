@@ -2,13 +2,16 @@
 
 *You now need yarn installed: https://yarnpkg.com/en/docs/install*
 
-## Deploying new releases of the main compiler
+Workflows now automatically check for and create new releases daily based from tags
+on the main compiler repo.
+
+## Manually deploying new releases of the main compiler
 
  1. Run the [Compiler release workflow](https://github.com/google/closure-compiler-npm/actions/workflows/release.yml)
      * For the `COMPILER_VERSION_NUMBER` input, use the actual version number here without the `v`.
+     * If you do not provide a version number, the workflow will use the oldest version tag that is newer than the current package major version.
  2. Verify the workflow runs successfully. It will push the release commit and tag.
- 3. Manually run the [Compiler Build CI workflow](https://github.com/google/closure-compiler-npm/actions/workflows/build.yml)
- 4. Verify the new version published to npm.
+ 3. Verify the new version published to npm.
 
 ## Deploying changes to the package CLIs or plugins
 

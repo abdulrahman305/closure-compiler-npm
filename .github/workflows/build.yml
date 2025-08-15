@@ -4,11 +4,16 @@ on:
   push:
     branches: [ master ]
   workflow_dispatch: {}
+  workflow_call:
+    inputs:
+      release-tag:
+        required: true
+        type: string
+    secrets:
+      NPM_PUBLISH_AUTH_TOKEN:
+        required: true
   pull_request:
     branches: [ master ]
-  schedule:
-    # Daily at 12pm UTC
-    - cron: '0 12 * * *'
 
 jobs:
   # Build the compiler jar file from the submodule
@@ -16,18 +21,17 @@ jobs:
     name: Build Compiler
     runs-on: ubuntu-latest
     env:
-      COMPILER_NIGHTLY: ${{ github.event_name == 'schedule' }}
       FORCE_COLOR: '1'
     steps:
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: adopt-hotspot
           java-version: 21
           java-package: jdk
           architecture: x64
       - name: Setup Bazelisk
-        uses: bazel-contrib/setup-bazel@0.8.1
+        uses: bazel-contrib/setup-bazel@e8776f58fb6a6e9055cbaf1b38c52ccc5247e9c4 # 0.14.0
         with:
           # Avoid downloading Bazel every time.
           bazelisk-cache: true
@@ -35,116 +39,193 @@ jobs:
           disk-cache: ${{ github.workflow }}
           # Share repository cache between workflows.
           repository-cache: true
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
         with:
           submodules: recursive
+          ref: ${{ inputs.release-tag || '' }}
       - name: Fetch submodule tags
         working-directory: compiler
         run: git fetch --tags https://github.com/google/closure-compiler.git
-      - name: Update compiler submodule to master if nightly build
-        if: ${{ env.COMPILER_NIGHTLY == 'true' }}
-        working-directory: compiler
-        run: |
-          git checkout master
-          git pull https://github.com/google/closure-compiler.git master
-          git log -1 | cat
-      - name: Get yarn cache directory path
-        run: echo "yarn_cache_dir=$(yarn cache dir)" >> $GITHUB_ENV
-      - name: Yarn and maven cache
-        uses: actions/cache@v4
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # 4.4.0
         with:
-          path: |
-            ${{ env.yarn_cache_dir }}
-            ~/.m2/repository
-          key: ${{ runner.os }}-yarn-mvn-java11-${{ hashFiles('**/yarn.lock', '**/pom.xml') }}
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
       - name: Install packages
-        run: yarn install --colors=always
+        run: YARN_ENABLE_COLORS=true yarn install
       - name: Build jar
-        # unset ANDROID_HOME to prevent bazel from trying to use the Android SDK 
-        run: unset ANDROID_HOME && ./build-scripts/build_compiler.js
+        # unset ANDROID_HOME to prevent bazel from trying to use the Android SDK
+        run: unset ANDROID_HOME && ./build-scripts/build-compiler.js
       - name: Tests
-        run: node_modules/.bin/mocha --colors
+        run: YARN_ENABLE_COLORS=true yarn test:root
       - name: Upload contrib folder
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Contrib folder
           path: compiler/contrib
+      - name: Upload externs folder
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Externs folder
+          path: compiler/externs
       - name: Upload compiler jar
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Compiler.jar
           path: packages/google-closure-compiler-java/compiler.jar
 
   # Build the native image on Linux
-  # The runner image determines GLIBC compatibility and should not be changed without
-  # understanding the impact. See https://github.com/google/closure-compiler-npm/issues/280
   build-linux:
     name: Build Linux Native Image
     needs: build-compiler
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     env:
-      NODE_VERSION: '18.x'
+      NODE_VERSION: '20.x'
       FORCE_COLOR: '1'
+      MUSL_HOME: ${{ github.workspace }}/musl-toolchain
     steps:
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
         with:
-          distribution: adopt-hotspot
-          java-version: 21
-          java-package: jdk
-          architecture: x64
-      - uses: actions/checkout@v4
+          ref: ${{ inputs.release-tag || '' }}
+      - name: Checkout musl
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
+        with:
+          repository: kraj/musl
+          ref: c47ad25ea3b484e10326f933e927c0bc8cded3da # patched 1.2.5 version
+          path: musl
+          clean: false
+      - name: Checkout zlib
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
+        with:
+          repository: madler/zlib
+          ref: 04f42ceca40f73e2978b50e93806c2a18c1281fc # v1.2.13
+          path: zlib
+          clean: false
+      - name: Build musl and zlib
+        run: |
+          # See https://www.graalvm.org/latest/reference-manual/native-image/guides/build-static-executables/
+          # We have to build MUSL from source to ensure recent CVEs are patched
+
+          # Build musl from source
+          pushd musl
+          ./configure --prefix=$MUSL_HOME --static
+          sudo make && make install
+          popd
+
+          # Install a symlink for use by native-image
+          ln -s $MUSL_HOME/bin/musl-gcc $MUSL_HOME/bin/x86_64-linux-musl-gcc
+
+          # Extend the system path and confirm that musl is available by printing its version
+          export PATH="$MUSL_HOME/bin:$PATH"
+          echo "$path" >> $GITHUB_PATH
+          x86_64-linux-musl-gcc --version
+
+          # Build zlib with musl from source and install into the MUSL_HOME directory
+          pushd zlib
+          CC=musl-gcc ./configure --prefix=$MUSL_HOME --static
+          make && make install
+          popd
       - name: Use Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # 4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: graalvm/setup-graalvm@v1
+          cache: yarn
+      - name: Install GraalVM
+        uses: graalvm/setup-graalvm@01ed653ac833fe80569f1ef9f25585ba2811baab # 1.3.3
         with:
-          java-version: 21
+          java-version: 24
           distribution: 'graalvm-community'
           github-token: ${{ secrets.GITHUB_TOKEN }}
           native-image-job-reports: 'true'
-      - name: Setup upx
-        run: |
-          UPX_VERSION=3.96
-          curl --fail --show-error --location --remote-name "https://github.com/upx/upx/releases/download/v$UPX_VERSION/upx-$UPX_VERSION-amd64_linux.tar.xz"
-          tar -xf upx-$UPX_VERSION-amd64_linux.tar.xz
-          mv ./upx-$UPX_VERSION-amd64_linux/upx /usr/local/bin/upx
       - name: Download compiler jar
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
           name: Compiler.jar
           path: packages/google-closure-compiler-java/
       - name: Download contrib folder
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
           name: Contrib folder
           path: packages/google-closure-compiler/contrib
-      - name: Get yarn cache directory path
-        run: echo "yarn_cache_dir=$(yarn cache dir)" >> $GITHUB_ENV
-      - name: Cache yarn
-        uses: actions/cache@v4
-        id: yarn-cache
+      - name: Download externs folder
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
-          path: ${{ env.yarn_cache_dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
+          name: Externs folder
+          path: packages/google-closure-compiler/externs
       - name: Install packages
-        run: yarn install --colors=always
+        run: YARN_ENABLE_COLORS=true yarn install
       - name: Build image
         working-directory: packages/google-closure-compiler-linux
         run: |
+          export PATH="$MUSL_HOME/bin:$PATH"
           cp ../google-closure-compiler-java/compiler.jar compiler.jar
           yarn run build
-          upx compiler
       - name: Tests
-        run: yarn workspaces run test --colors
+        run: FORCE_COLOR=1 yarn workspaces foreach -A --no-private run test
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Linux image
           path: packages/google-closure-compiler-linux/compiler
+
+  # Build the native image on Linux
+  # The runner image determines GLIBC compatibility and should not be changed without
+  # understanding the impact. See https://github.com/google/closure-compiler-npm/issues/280
+  build-linux-arm64:
+    name: Build Linux Native Image for arm processors
+    needs: build-compiler
+    runs-on: ubuntu-24.04-arm
+    env:
+      NODE_VERSION: '20.x'
+      FORCE_COLOR: '1'
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
+        with:
+          ref: ${{ inputs.release-tag || '' }}
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # 4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+      - name: Setup GraalVM
+        uses: graalvm/setup-graalvm@01ed653ac833fe80569f1ef9f25585ba2811baab # 1.3.3
+        with:
+          java-version: 24
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          native-image-job-reports: 'true'
+      - name: Download compiler jar
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
+        with:
+          name: Compiler.jar
+          path: packages/google-closure-compiler-java/
+      - name: Download contrib folder
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
+        with:
+          name: Contrib folder
+          path: packages/google-closure-compiler/contrib
+      - name: Download externs folder
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
+        with:
+          name: Externs folder
+          path: packages/google-closure-compiler/externs
+      - name: Install packages
+        run: YARN_ENABLE_COLORS=true yarn install
+      - name: Build image
+        working-directory: packages/google-closure-compiler-linux-arm64
+        run: |
+          cp ../google-closure-compiler-java/compiler.jar compiler.jar
+          yarn run build
+      - name: Tests
+        run: FORCE_COLOR=1 yarn workspaces foreach -A --no-private run test
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Linux arm64 image
+          path: packages/google-closure-compiler-linux-arm64/compiler
 
   # Build the native image on MacOS
   build-macos:
@@ -152,65 +233,54 @@ jobs:
     needs: build-compiler
     runs-on: macos-latest
     env:
-      NODE_VERSION: '20.x'
+      NODE_VERSION: '22.x'
       FORCE_COLOR: '1'
     steps:
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
         with:
-          distribution: adopt-hotspot
-          java-version: 21
-          java-package: jdk
-          architecture: x64
-      - uses: actions/checkout@v4
+          ref: ${{ inputs.release-tag || '' }}
       - name: Use Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # 4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: graalvm/setup-graalvm@v1
+          cache: yarn
+      - name: Setup GraalVM
+        uses: graalvm/setup-graalvm@01ed653ac833fe80569f1ef9f25585ba2811baab # 1.3.3
         with:
-          java-version: 21
+          java-version: 24
           distribution: 'graalvm-community'
           github-token: ${{ secrets.GITHUB_TOKEN }}
           native-image-job-reports: 'true'
-#        # See https://github.com/google/closure-compiler-npm/issues/265
-#      - name: Install upx
-#        run: brew install upx
       - name: Download compiler jar
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
           name: Compiler.jar
           path: packages/google-closure-compiler-java/
       - name: Download contrib folder
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
           name: Contrib folder
           path: packages/google-closure-compiler/contrib
-      - name: Get yarn cache directory path
-        run: echo "yarn_cache_dir=$(yarn cache dir)" >> $GITHUB_ENV
-      - name: Cache yarn
-        uses: actions/cache@v4
-        id: yarn-cache
+      - name: Download externs folder
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
-          path: ${{ env.yarn_cache_dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
+          name: Externs folder
+          path: packages/google-closure-compiler/externs
       - name: Install packages
-        run: yarn install --colors=always
+        run: YARN_ENABLE_COLORS=true yarn install
       - name: Build image
-        working-directory: packages/google-closure-compiler-osx
+        working-directory: packages/google-closure-compiler-macos
         run: |
           cp ../google-closure-compiler-java/compiler.jar compiler.jar
           yarn run build
-#          upx compiler
       - name: Tests
-        run: yarn workspaces run test --colors
+        run: FORCE_COLOR=1 yarn workspaces foreach -A --no-private run test
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: MacOS image
-          path: packages/google-closure-compiler-osx/compiler
+          path: packages/google-closure-compiler-macos/compiler
 
   # Build the native image on Windows
   build-windows:
@@ -218,50 +288,42 @@ jobs:
     needs: build-compiler
     runs-on: windows-latest
     env:
-      NODE_VERSION: '20.x'
+      NODE_VERSION: '22.x'
       FORCE_COLOR: '1'
     steps:
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
         with:
-          distribution: adopt-hotspot
-          java-version: 21
-          java-package: jdk
-          architecture: x64
-      - uses: actions/checkout@v4
+          ref: ${{ inputs.release-tag || '' }}
       - name: Use Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # 4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: graalvm/setup-graalvm@v1
+          cache: yarn
+      - name: Setup GraalVM
+        uses: graalvm/setup-graalvm@01ed653ac833fe80569f1ef9f25585ba2811baab # 1.3.3
         with:
-          java-version: 21
+          java-version: 24
           distribution: 'graalvm-community'
           github-token: ${{ secrets.GITHUB_TOKEN }}
           native-image-job-reports: 'true'
       - name: Download compiler jar
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
           name: Compiler.jar
           path: packages/google-closure-compiler-java/
       - name: Download contrib folder
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
           name: Contrib folder
           path: packages/google-closure-compiler/contrib
-      - name: Get yarn cache directory path
-        # See https://stackoverflow.com/a/66737579/1211524
-        run: echo "yarn_cache_dir=$(yarn cache dir)" >> $env:GITHUB_ENV
-      - name: Cache yarn
-        uses: actions/cache@v4
-        id: yarn-cache
+      - name: Download externs folder
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
-          path: ${{ env.yarn_cache_dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
+          name: Externs folder
+          path: packages/google-closure-compiler/externs
       - name: Install packages
-        run: yarn install --colors=always
+        run: yarn install
       - name: Build image
         working-directory: packages/google-closure-compiler-windows
         run: |
@@ -269,11 +331,9 @@ jobs:
           yarn run build
       - name: Tests
         shell: cmd
-        run: |
-          echo "Running Tests"
-          yarn workspaces run test --colors
+        run: yarn workspaces foreach -A --no-private run test
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Windows image
           path: packages/google-closure-compiler-windows/compiler.exe
@@ -282,74 +342,71 @@ jobs:
   publish-packages:
     name: Publish Packages
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call' }}
     env:
-      NODE_VERSION: '20.x'
-      COMPILER_NIGHTLY: ${{ github.event_name == 'schedule' }}
+      NODE_VERSION: '22.x'
       NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_AUTH_TOKEN }}
       FORCE_COLOR: '1'
     needs:
       - build-linux
+      - build-linux-arm64
       - build-macos
       - build-windows
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # 4.2.2
+        with:
+          ref: ${{ inputs.release-tag || '' }}
       - name: Use Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # 4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: https://registry.npmjs.org/
+          cache: yarn
       - name: Download compiler jar
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
           name: Compiler.jar
           path: packages/google-closure-compiler-java/
       - name: Download Linux image
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
           name: Linux image
           path: packages/google-closure-compiler-linux/
+      - name: Download Linux arm64 image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
+        with:
+          name: Linux arm64 image
+          path: packages/google-closure-compiler-linux-arm64/
       - name: Download MacOS image
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
           name: MacOS image
-          path: packages/google-closure-compiler-osx/
+          path: packages/google-closure-compiler-macos/
       - name: Download Windows image
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
           name: Windows image
           path: packages/google-closure-compiler-windows/
       - name: Download contrib folder
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
         with:
           name: Contrib folder
           path: packages/google-closure-compiler/contrib
+      - name: Download externs folder
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # 4.3.0
+        with:
+          name: Externs folder
+          path: packages/google-closure-compiler/externs
       - name: Mark binaries executable
         run: |
           chmod 755 packages/google-closure-compiler-linux/compiler
-          chmod 755 packages/google-closure-compiler-osx/compiler
+          chmod 755 packages/google-closure-compiler-linux-arm64/compiler
+          chmod 755 packages/google-closure-compiler-macos/compiler
           chmod 755 packages/google-closure-compiler-windows/compiler.exe
-      - name: Get yarn cache directory path
-        run: echo "yarn_cache_dir=$(yarn cache dir)" >> $GITHUB_ENV
-      - name: Cache yarn
-        uses: actions/cache@v4
-        id: yarn-cache
-        with:
-          path: ${{ env.yarn_cache_dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
       - name: Install packages
-        run: yarn install --colors=always
+        run: YARN_ENABLE_COLORS=true yarn install
       - name: Prepare for publish
         run: ./build-scripts/add-os-restrictions.js
-      - name: Create the nightly version
-        if: ${{ env.COMPILER_NIGHTLY == 'true' }}
-        run: |
-          git config --global user.email "github-bot@github.com"
-          git config --global user.name "Github Bot"
-          ./build-scripts/create-nightly-version.js
-      - name: Configure yarn
-        run: yarn config set registry https://registry.npmjs.org/
       - name: Publish packages to npm
         run: yarn publish-packages

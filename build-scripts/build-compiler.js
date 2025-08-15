@@ -24,32 +24,27 @@
  *
  * For pull requests and pushes to master, the compiler submodule is expected to be pointed at the tagged commit
  * that matches the package major version.
- *
- * When the COMPILER_NIGHTLY env variable is set, the compiler submodule will be pointing to the latest master
- * commit. This is for regular integration testing of the compiler with the various tests in this repo's packages.
- * In this case the compiler will be built as a SNAPSHOT.
  */
-"use strict";
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath, URL} from 'node:url';
+import ncp from 'ncp';
+import semver from 'semver';
+import runCommand from './run-command.js';
 
-const ncp = require("ncp");
-const runCommand = require("./run-command");
-const packageInfo = require("../package.json");
-const semver = require("semver");
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const packageInfo = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf-8'));
 
 /**
  * The compiler version that will be built.
  *
  * For release builds, this is of the form: "vYYYYMMDD"
- * For nightly builds, this is "1.0-SNAPSHOT"
  *
  * @type {string}
  */
-const compilerVersion = process.env.COMPILER_NIGHTLY == 'true'
-    ? 'SNAPSHOT-1.0'
-    : `v${semver.major(packageInfo.version)}`;
+const compilerVersion = `v${semver.major(packageInfo.version)}`;
 
-const compilerTargetName = compilerVersion === 'SNAPSHOT-1.0' || parseInt(compilerVersion.slice(1), 10) > 20221004 ?
-    'compiler_uberjar_deploy.jar' : 'compiler_unshaded_deploy.jar';
+const compilerTargetName = 'compiler_uberjar_deploy.jar';
 const compilerJavaBinaryPath = `./compiler/bazel-bin/${compilerTargetName}`;
 
 async function main() {
@@ -79,8 +74,12 @@ async function main() {
       './packages/google-closure-compiler-linux/compiler.jar'
     ),
     copy(
+        compilerJavaBinaryPath,
+        './packages/google-closure-compiler-linux/compiler-arm64.jar'
+    ),
+    copy(
       compilerJavaBinaryPath,
-      './packages/google-closure-compiler-osx/compiler.jar'
+      './packages/google-closure-compiler-macos/compiler.jar'
     ),
     copy(
       compilerJavaBinaryPath,

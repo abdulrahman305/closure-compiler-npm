@@ -1,17 +1,16 @@
 {
   "name": "closure-compiler-npm",
-  "version": "20240317.0.0",
+  "version": "20250810.0.0",
   "private": true,
+  "type": "module",
   "workspaces": {
     "packages": [
       "packages/google-closure-compiler-java",
       "packages/google-closure-compiler-linux",
-      "packages/google-closure-compiler-osx",
+      "packages/google-closure-compiler-linux-arm64",
+      "packages/google-closure-compiler-macos",
       "packages/google-closure-compiler-windows",
       "packages/google-closure-compiler"
-    ],
-    "nohoist": [
-      "**/mocha"
     ]
   },
   "description": "Check, compile, optimize and compress Javascript with Closure-Compiler",
@@ -30,28 +29,31 @@
     "url": "https://github.com/google/closure-compiler/issues"
   },
   "homepage": "https://developers.google.com/closure/compiler/",
-  "dependencies": {},
   "devDependencies": {
-    "glob": "7.x",
+    "glob": "11.x",
     "graphlib": "2.x",
-    "mocha": "10.x",
+    "jasmine": "^5.6.0",
+    "jasmine-console-reporter": "^3.1.0",
+    "minimist": "1.x",
     "ncp": "2.x",
-    "semver": "5.x",
-    "should": "13.x"
+    "semver": "5.x"
   },
   "resolutions": {
-    "**/glob-stream/**/glob-parent": "^5.1.2",
-    "**/glob-watcher": "^6.0.0",
-    "**/gulp-cli/**/debug": "^3.0.0",
-    "**/gulp-cli/**/yargs-parser": "^13.1.2",
-    "**/gulp-mocha/**/mocha": "^10.0.0",
-    "**/union-value/**/set-value": "^2.0.1"
+    "chokidar/glob-parent": "^5.1.2",
+    "expand-brackets/debug": "^3.0.0",
+    "findup-sync/micromatch": "^4.0.8",
+    "glob-stream/glob-parent": "^5.1.2",
+    "glob-watcher": "^6.0.0",
+    "matchdep/micromatch": "^4.0.8",
+    "snapdragon/debug": "^3.0.0",
+    "yargs": "^13.3.0"
   },
   "scripts": {
     "build": "./build-scripts/build.sh",
     "test": "./build-scripts/test.sh",
+    "test:root": "./build-scripts/jasmine.sh --reporter=jasmine-console-reporter test/*.js",
     "clean": "./build-scripts/clean.sh",
-    "version": "./build-scripts/version-packages.js",
     "publish-packages": "./build-scripts/publish.js"
-  }
+  },
+  "packageManager": "yarn@4.9.1"
 }

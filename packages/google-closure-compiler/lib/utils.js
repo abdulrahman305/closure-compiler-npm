@@ -13,41 +13,48 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-'use strict';
+import fs from 'node:fs';
+import {createRequire} from 'node:module';
+const require = createRequire(import.meta.url);
 
-function getNativeImagePath() {
-  if (process.platform === 'darwin') {
-    try {
-      return require('google-closure-compiler-osx');
-    } catch (e) {
-      return;
-    }
-  }
-  if (process.platform === 'win32') {
-    try {
-      return require('google-closure-compiler-windows');
-    } catch (e) {
-      return;
-    }
-  }
-  if (process.platform === 'linux' && ['x64','x32'].includes(process.arch)) {
-    try {
-      return require('google-closure-compiler-linux');
-    } catch (e) {
-    }
-  }
-}
+/** @type {!Map<string, string>} */
+const platformLookup = new Map([
+  ['darwin', 'macos'],
+  ['win32', 'windows'],
+  ['linux', 'linux'],
+]);
 
-function getFirstSupportedPlatform(platforms) {
+/** @return {string|undefined} */
+export const getNativeImagePath = () => {
+  let platform = platformLookup.get(process.platform);
+  let binarySuffix = '';
+  if (!platform) {
+    return;
+  } else if (platform === 'linux' && process.arch === 'arm64') {
+    platform += '-arm64';
+  } else if (platform === 'windows') {
+    binarySuffix = '.exe';
+  }
+  const compilerPath = `google-closure-compiler-${platform}/compiler${binarySuffix}`;
+  try {
+    return require.resolve(compilerPath);
+  } catch {}
+};
+
+/**
+ * @param {!Array<string>} platforms
+ * @return {string}
+ */
+export const getFirstSupportedPlatform = (platforms) => {
   const platform = platforms.find((platform, index) => {
     switch (platform.toLowerCase()) {
-      case "java":
+      case 'java':
         if (index === platforms.length - 1) {
           return true;
         }
         return process.env.JAVA_HOME;
 
-      case "native":
+      case 'native':
         if (getNativeImagePath()) {
           return true;
         }
@@ -57,9 +64,4 @@ function getFirstSupportedPlatform(platforms) {
     throw new Error('No supported platform for closure-compiler found.');
   }
   return platform;
-}
-
-module.exports = {
-  getNativeImagePath,
-  getFirstSupportedPlatform
 };

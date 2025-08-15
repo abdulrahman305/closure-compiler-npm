@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-'use strict';
 /**
  * @fileoverview
  *
@@ -23,15 +22,39 @@
  * Update any dependencies on other packages in this project.
  */
 
-const fs = require('fs');
-const path = require('path');
-const childProcess = require('child_process');
+import childProcess from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath, URL} from 'node:url';
+import parseArgs from 'minimist';
+import semver from 'semver';
 
-const newVersion = process.env.npm_package_version;
+const flags = parseArgs(process.argv.slice(2));
+if (!flags['new-version']) {
+  process.stderr.write(`No new version specified\n`);
+  process.exit();
+}
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const rootPackageJsonPath = path.resolve(__dirname, '../package.json');
+const rootPackageJson = JSON.parse(fs.readFileSync(rootPackageJsonPath, 'utf-8'));
+const currentVersion = semver(rootPackageJson.version);
+const newVersion = semver(flags['new-version']);
+
+if (!semver.gt(newVersion, currentVersion)) {
+  process.stderr.write(`New version must be greater than current version\n`);
+  process.exit();
+}
+
+rootPackageJson.version = newVersion.toString();
+fs.writeFileSync(rootPackageJsonPath, `${JSON.stringify(rootPackageJson, null, 2)}\n`, 'utf8');
+childProcess.execSync(`git add "${rootPackageJsonPath}"`, {stdio: 'inherit'});
+
+const dependencyTypes = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
+
 const packagesDirPath = path.resolve(__dirname, '../packages');
 const packages = fs.readdirSync(packagesDirPath);
 
-packages.forEach((packageName) => {
+for (const packageName of packages) {
   const packageJsonPath = `${packagesDirPath}/${packageName}/package.json`;
   // Only directories that have package.json files are packages in this project.
   // For instance, the google-closure-compiler-js directory only has a readme for historical purposes and should
@@ -39,22 +62,23 @@ packages.forEach((packageName) => {
   try {
     fs.statSync(packageJsonPath); // check if file exists
   } catch {
-    return;
+    continue;
   }
   const pkgJson = JSON.parse(fs.readFileSync(packageJsonPath));
-  pkgJson.version = newVersion;
+  pkgJson.version = newVersion.toString();
 
-  ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
-      .forEach((dependencyType) =>{
-        if (!pkgJson[dependencyType]) {
-          return;
-        }
-        Object.keys(pkgJson[dependencyType]).forEach((dependencyName) => {
-          if (packages.includes(dependencyName)) {
-            pkgJson[dependencyType][dependencyName] = `^${newVersion}`;
-          }
-        });
-      });
+  for (const dependencyType of dependencyTypes) {
+    for (const dependencyName of Object.keys(pkgJson[dependencyType] || {})) {
+      if (packages.includes(dependencyName)) {
+        pkgJson[dependencyType][dependencyName] = `^${newVersion.toString()}`;
+      }
+    }
+  }
   fs.writeFileSync(packageJsonPath, `${JSON.stringify(pkgJson, null, 2)}\n`, 'utf8');
-  childProcess.execSync(`git add "${packageJsonPath}"`);
-});
+  childProcess.execSync(`git add "${packageJsonPath}"`, {stdio: 'inherit'});
+}
+
+childProcess.execSync(`yarn install --no-immutable`, {stdio: 'inherit'});
+childProcess.execSync(`git add "${path.resolve(__dirname, '../yarn.lock')}"`, {stdio: 'inherit'});
+childProcess.execSync(`git commit -m "v${newVersion.toString()}"`, {stdio: 'inherit'});
+childProcess.execSync(`git tag -a v${newVersion.toString()} -m "v${newVersion.toString()}"`, {stdio: 'inherit'});
